@@ -9,13 +9,13 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # This permission is required to create releases and tags
 
     steps:
     - name: Check out the repo
       uses: actions/checkout@v3
       with:
-        fetch-depth: 0
+        fetch-depth: 0 # Fetches all history for all tags and branches
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -31,13 +31,22 @@ jobs:
       id: tag_version
       run: |
         git fetch --tags --force
+        # Get the latest tag, default to 0.0 if no tags are found
         latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0")
+        
+        # Split version into major and minor parts
         IFS='.' read -r -a version_parts <<< "$latest_tag"
         major=${version_parts[0]}
         minor=${version_parts[1]}
+        
+        # Increment the minor version
         new_minor=$((minor + 1))
         new_tag="$major.$new_minor"
+        
+        # ** THE FIX IS HERE **
+        # Use an environment file to set the new_tag variable for subsequent steps
         echo "new_tag=$new_tag" >> $GITHUB_ENV
+        
         echo "Previous tag was $latest_tag"
         echo "New tag is $new_tag"
 
@@ -47,6 +56,8 @@ jobs:
 
     - name: Create a new tag
       run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
         git tag "v${{ env.new_tag }}"
         git push origin "v${{ env.new_tag }}"
 
@@ -56,6 +67,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
+        # Use env context to access the new_tag variable
         tag_name: "v${{ env.new_tag }}"
         release_name: "Release v${{ env.new_tag }}"
         draft: false
@@ -68,5 +80,6 @@ jobs:
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
         asset_path: ./dist/app-release
+        # Use env context to access the new_tag variable
         asset_name: app-release-v${{ env.new_tag }}
         asset_content_type: application/octet-stream
