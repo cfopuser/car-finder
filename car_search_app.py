@@ -2,44 +2,48 @@ import sys
 import os
 import sqlite3
 import json
+import webbrowser
+import requests
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QPushButton, QLabel,
     QLineEdit, QVBoxLayout, QHBoxLayout, QFileDialog, QMessageBox,
     QSizePolicy, QGridLayout, QScrollArea, QStackedWidget, QFrame,
     QCompleter, QToolTip
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QThread, Signal, QObject
 from PySide6.QtGui import QFont, QPixmap, QIcon, QIntValidator, QCursor, QAction
 
 # --- הגדרות גלובליות ---
 
+APP_VERSION = "1.2"
+GITHUB_REPO = "cfopuser/car-finder"
 CONFIG_FILE = "app_config.json"
 HISTORY_LIMIT = 50 
 HISTORY_DISPLAY_LIMIT = 4
 
 ICON_MAP = {
-    "מספר רכב": "license-plate.png", "שם הרכב": "factory.png", "שם דגם": "car-model.png",
+    "מספר רכב": "license-plate.png", "שם יצרן": "factory.png", "שם דגם": "car-model.png",
     "רמת גימור": "finish.png", "שנת ייצור": "calendar.png", "דגם מנוע": "engine.png",
     "ביצוע טסט קודם": "test.png", "טסט בתוקף עד": "license.png", "בעלות": "owner.png",
     "צבע הרכב": "color-palette.png", "סוג דלק": "fuel.png", "מועד עלייה לכביש": "road.png"
 }
 COLUMN_NAMES_HEBREW = [
-    "מספר רכב", "קוד תוצר", "סוג דגם", "שם הרכב", "קוד דגם", "שם דגם", "רמת גימור",
-    "רמת אבזור בטיחותי", "דרגת זיהום", "שנת ייצור", "דגם מנוע", "ביצוע טסט קודם",
+    "מספר רכב", "קוד יצרן", "סוג דגם", "שם יצרן", "קוד דגם", "שם דגם", "רמת גימור",
+    "דרגת בטיחות", "דרגת זיהום", "שנת ייצור", "דגם מנוע", "ביצוע טסט קודם",
     "טסט בתוקף עד", "בעלות", "מסגרת", "קוד צבע", "צבע הרכב", "צמיג קדמי",
-    "צמיג אחורי", "סוג דלק", "הוראת רישום", "מועד עלייה לכביש", "כינוי מסחרי"
+    "צמיג אחורי", "סוג דלק", "הוראת רישום", "מועד עלייה לכביש", "דגם"
 ]
 CATEGORIES = {
     "פרטים עיקריים": [
-        "שם הרכב",  "בעלות", "ביצוע טסט קודם", "מועד עלייה לכביש"
+        "דגם", "בעלות", "ביצוע טסט קודם", "מועד עלייה לכביש"
         , "שנת ייצור", "צבע הרכב", "טסט בתוקף עד" , "מספר רכב"
     ],
     "מפרט טכני": [
-      "דרגת זיהום", "רמת אבזור בטיחותי",  "רמת גימור", "דגם מנוע", "סוג דלק", "צמיג קדמי", "צמיג אחורי", 
-        "כינוי מסחרי"
+      "שם יצרן" ,"דרגת זיהום", "דרגת בטיחות",  "רמת גימור", "דגם מנוע", "סוג דלק", "צמיג קדמי", "צמיג אחורי", 
+        
     ],
     "פרטי זיהוי": [
-        "מסגרת",  "שם דגם", "הוראת רישום", "קוד תוצר", "קוד דגם", 
+        "מסגרת",  "שם דגם", "הוראת רישום", "קוד יצרן", "קוד דגם", 
         "סוג דגם", "קוד צבע"
     ]
 }
@@ -83,6 +87,35 @@ def load_icons():
         pixmap = QPixmap(path)
         loaded_icons[field] = pixmap.scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation) if not pixmap.isNull() else QPixmap()
 
+# --- לוגיקת בדיקת עדכונים ---
+
+class UpdateChecker(QObject):
+    update_available = Signal(str, str)
+    no_update = Signal()
+    error_occurred = Signal(str)
+
+    def __init__(self, repo, current_version):
+        super().__init__()
+        self.repo = repo
+        self.current_version = current_version
+        self.api_url = f"https://api.github.com/repos/{self.repo}/releases/latest"
+
+    def check(self):
+        try:
+            response = requests.get(self.api_url, timeout=10)
+            response.raise_for_status()
+            latest_release = response.json()
+            latest_version = latest_release.get("tag_name", "").lstrip('v')
+            
+            if latest_version and latest_version > self.current_version:
+                download_url = latest_release.get("html_url")
+                self.update_available.emit(latest_version, download_url)
+            else:
+                self.no_update.emit()
+        except requests.exceptions.RequestException as e:
+            self.error_occurred.emit(f"שגיאת רשת: {e}")
+        except Exception as e:
+            self.error_occurred.emit(f"שגיאה לא צפויה: {e}")
 
 # --- ווידג'ט כרטיס מותאם אישית ---
 
@@ -147,7 +180,7 @@ class HoverCard(QFrame):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("איתור פרטי רכב 🚗")
+        self.setWindowTitle("איתור פרטי רכב ")
         self.setWindowIcon(QIcon(resource_path("my_icon.ico")))
 
         self.setGeometry(100, 100, 900, 700)
@@ -178,9 +211,7 @@ class MainWindow(QMainWindow):
         self._toggle_clear_button(self.initial_plate_input)
         self._toggle_clear_button(self.main_plate_input)
 
-    # --- פונקציית טוגל לניהול כפתור המחיקה ---
     def _toggle_clear_button(self, line_edit):
-        """מציג או מסתיר את כפתור המחיקה בהתאם לטקסט בשדה."""
         action = line_edit.actions()[0] if line_edit.actions() else None
         if action:
             action.setVisible(bool(line_edit.text()))
@@ -230,12 +261,24 @@ class MainWindow(QMainWindow):
         msg.setWindowTitle("אודות")
         msg.setStyleSheet("""
             QMessageBox { background-color: #2a2a45; }
-            QLabel { color: #e0e0e0; }
+            QLabel { color: #e0e0e0; font-size: 14px; }
             QPushButton {
                 background-color: #3f51b5; color: white; border-radius: 4px; padding: 5px 10px;
             }
         """)
-        msg.setText("פותח על ידי @cfopuser ו @איש-אמת")
+        
+        rich_text = f"""
+            <p><strong>גירסה {APP_VERSION}</strong></p>
+            <p>פותח על ידי @cfopuser ו @איש-אמת</p>
+            <p>בקרו בפרויקט ב-<a style='color: #5c6bc0; text-decoration: none;' href='https://github.com/cfopuser/car-finder'>GitHub</a></p>
+        """
+        msg.setText(rich_text)
+        msg.setTextFormat(Qt.RichText)
+        
+        label = msg.findChild(QLabel, "qt_msgbox_label")
+        if label:
+            label.setOpenExternalLinks(True)
+
         msg.exec()
 
     def _create_setup_ui(self):
@@ -283,7 +326,6 @@ class MainWindow(QMainWindow):
         self.initial_plate_input.addAction(clear_action_initial, QLineEdit.LeadingPosition)
         self.initial_plate_input.textChanged.connect(lambda: self._toggle_clear_button(self.initial_plate_input))
 
-        # <<< שינוי: החלפת טקסט האמוג'י באייקון חיפוש
         search_button = QPushButton("חפש")
         search_button.setIcon(loaded_icons['search_icon'])
         search_button.setFixedWidth(400)
@@ -306,17 +348,24 @@ class MainWindow(QMainWindow):
         bottom_layout = QHBoxLayout(bottom_row)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.addStretch()
+        
+        button_style = """
+            QPushButton {
+                background-color: #444a58; color: #e0e0e0; border-radius: 8px;
+                padding: 8px 12px; font-size: 12px; font-weight: bold;
+            }
+            QPushButton:hover { background-color: #586175; }
+        """
+
+        update_button = QPushButton("בדוק עדכונים")
+        update_button.setStyleSheet(button_style)
+        update_button.clicked.connect(self._check_for_updates)
 
         about_button = QPushButton("אודות")
-        about_button.setStyleSheet("""
-            QPushButton {
-                background: none; border: none; color: #5c6bc0;
-                font-size: 12px; padding: 5px;
-            }
-            QPushButton:hover { color: #3f51b5; }
-        """)
+        about_button.setStyleSheet(button_style)
         about_button.clicked.connect(self._show_about_popup)
-
+        
+        bottom_layout.addWidget(update_button)
         bottom_layout.addWidget(about_button)
         main_layout.addWidget(bottom_row)
         return widget
@@ -342,20 +391,29 @@ class MainWindow(QMainWindow):
         self.main_plate_input.addAction(clear_action_main, QLineEdit.LeadingPosition)
         self.main_plate_input.textChanged.connect(lambda: self._toggle_clear_button(self.main_plate_input))
 
-        # <<< שינוי: החלפת טקסט האמוג'י באייקון חיפוש והוספת Tooltip
         self.search_button = QPushButton()
         self.search_button.setIcon(loaded_icons['search_icon'])
         self.search_button.setFixedSize(50, 46)
         self.search_button.clicked.connect(self.search_car)
-        self.search_button.setToolTip("חיפוש") # Tooltip added here!
+        self.search_button.setToolTip("לחץ לחיפוש פרטי הרכב")
         
         self.db_status_label = QLabel("לא נטען מסד נתונים.")
         self.db_status_label.setFont(QFont("Arial", 10))
+        self.db_status_label.setStyleSheet("""
+            QLabel {
+                background-color: #1e1e2f; color: #a0a0c0;
+                padding: 5px 10px; border-radius: 8px; font-weight: bold;
+            }
+        """)
 
         home_button = QPushButton("חזור")
         home_button.clicked.connect(self._go_to_home)
         change_db_button = QPushButton("החלף קובץ")
         change_db_button.clicked.connect(self._change_db)
+        about_button = QPushButton("אודות")
+        about_button.clicked.connect(self._show_about_popup)
+        update_button = QPushButton("בדוק עדכונים")
+        update_button.clicked.connect(self._check_for_updates)
 
         secondary_button_style = """
             QPushButton { background-color: #444a58; color: #e0e0e0; border-radius: 8px;
@@ -364,9 +422,13 @@ class MainWindow(QMainWindow):
         """
         home_button.setStyleSheet(secondary_button_style)
         change_db_button.setStyleSheet(secondary_button_style)
+        about_button.setStyleSheet(secondary_button_style)
+        update_button.setStyleSheet(secondary_button_style)
 
         top_bar_layout.addWidget(home_button)
         top_bar_layout.addWidget(change_db_button)
+        top_bar_layout.addWidget(update_button)
+        top_bar_layout.addWidget(about_button)
         top_bar_layout.addWidget(self.db_status_label)
         top_bar_layout.addStretch()
         top_bar_layout.addWidget(self.search_button)
@@ -390,6 +452,52 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(history_widget)
         main_layout.addWidget(results_container, 1)
         return widget
+    
+    def _check_for_updates(self):
+        self.update_msg = QMessageBox(self)
+        self.update_msg.setWindowTitle("בדיקת עדכונים")
+        self.update_msg.setText("בודק אחר עדכונים, אנא המתן...")
+        self.update_msg.setStyleSheet("QLabel{min-width: 300px;}")
+        self.update_msg.setStandardButtons(QMessageBox.NoButton)
+        self.update_msg.show()
+
+        self.thread = QThread()
+        self.checker = UpdateChecker(GITHUB_REPO, APP_VERSION)
+        self.checker.moveToThread(self.thread)
+
+        self.thread.started.connect(self.checker.check)
+        self.checker.update_available.connect(self._on_update_available)
+        self.checker.no_update.connect(self._on_no_update)
+        self.checker.error_occurred.connect(self._on_update_error)
+
+        self.checker.update_available.connect(self.thread.quit)
+        self.checker.no_update.connect(self.thread.quit)
+        self.checker.error_occurred.connect(self.thread.quit)
+
+        self.thread.finished.connect(self.checker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+        
+        self.thread.start()
+
+    def _on_update_available(self, version, url):
+        self.update_msg.done(0)
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("עדכון זמין")
+        msg_box.setText(f"גירסה חדשה ({version}) זמינה.\nהאם תרצה לעבור לדף ההורדות?")
+        msg_box.setIcon(QMessageBox.Information)
+        msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg_box.setDefaultButton(QMessageBox.Yes)
+        
+        if msg_box.exec() == QMessageBox.Yes:
+            webbrowser.open(url)
+    
+    def _on_no_update(self):
+        self.update_msg.done(0)
+        QMessageBox.information(self, "אין עדכונים", "הגרסה שברשותך היא העדכנית ביותר.")
+
+    def _on_update_error(self, error_str):
+        self.update_msg.done(0)
+        QMessageBox.warning(self, "שגיאת עדכון", f"לא ניתן לבדוק עדכונים:\n{error_str}")
 
     def _go_to_home(self):
         self.initial_plate_input.clear()
