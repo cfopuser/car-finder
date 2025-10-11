@@ -15,7 +15,7 @@ from PySide6.QtGui import QFont, QPixmap, QIcon, QIntValidator, QCursor, QAction
 
 # --- הגדרות גלובליות ---
 
-APP_VERSION = "1.2"
+APP_VERSION = "1.3"
 GITHUB_REPO = "cfopuser/car-finder"
 CONFIG_FILE = "app_config.json"
 HISTORY_LIMIT = 50 
@@ -410,10 +410,6 @@ class MainWindow(QMainWindow):
         home_button.clicked.connect(self._go_to_home)
         change_db_button = QPushButton("החלף קובץ")
         change_db_button.clicked.connect(self._change_db)
-        about_button = QPushButton("אודות")
-        about_button.clicked.connect(self._show_about_popup)
-        update_button = QPushButton("בדוק עדכונים")
-        update_button.clicked.connect(self._check_for_updates)
 
         secondary_button_style = """
             QPushButton { background-color: #444a58; color: #e0e0e0; border-radius: 8px;
@@ -422,13 +418,9 @@ class MainWindow(QMainWindow):
         """
         home_button.setStyleSheet(secondary_button_style)
         change_db_button.setStyleSheet(secondary_button_style)
-        about_button.setStyleSheet(secondary_button_style)
-        update_button.setStyleSheet(secondary_button_style)
 
         top_bar_layout.addWidget(home_button)
         top_bar_layout.addWidget(change_db_button)
-        top_bar_layout.addWidget(update_button)
-        top_bar_layout.addWidget(about_button)
         top_bar_layout.addWidget(self.db_status_label)
         top_bar_layout.addStretch()
         top_bar_layout.addWidget(self.search_button)
